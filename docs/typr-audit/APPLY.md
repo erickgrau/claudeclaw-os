@@ -1,113 +1,126 @@
-# Applying the Mabel patches (formerly Typr)
+# Applying the Mabel patches
 
 The audit branch ships a series of patches that build on each other. Apply
-them in order. Each patch's full rationale lives next to it in this directory.
+them in order.
 
-## Prerequisites
+## Patches
 
-A working Rust + Node + Tauri toolchain on macOS, and the whisper.cpp sidecar
-binary in place (see "Whisper sidecar" below).
+| Patch | What it does |
+|-------|-------------|
+| `v1-security-pass.patch` | Strip stdout transcript leaks. Move Groq key to OS keychain. Clear clipboard after paste. Allowlist model_size. Tighten CSP. macOS-only. |
+| `v1.1-rename-mabel-and-configurable-hotkey.patch` | Rename Typr → Mabel everywhere user-facing. Make the global hotkey rebindable from the UI. |
+| `v1.2-mabel-redesign.patch` | Full app redesign: new sidebar with Pro upsell items, dashboard with local stats, settings modal, help modal, fresh README, Persian cat placeholder icon. |
 
-## Quickstart
+## Quickstart for a fresh fork
 
 ```bash
-# 1. Clone your fork (run this OUTSIDE any existing typr dir)
-git clone git@github.com:erickgrau/typr.git
-cd typr
-git checkout -b mabel-v1.1
+# 1. Clone your fork (run OUTSIDE any existing typr/mabel dir)
+git clone git@github.com:erickgrau/typr.git mabel
+cd mabel
+git checkout -b mabel-v1.2
 
 # 2. Build the whisper.cpp sidecar (one-time, ~30 sec on M-series)
-#    The Rust build refuses to start without this binary present.
 cd ..
 git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git
 cd whisper.cpp
 cmake -B build
 cmake --build build --config Release -j
-mkdir -p ../typr/src-tauri/binaries
-cp build/bin/whisper-cli ../typr/src-tauri/binaries/whisper-cpp-aarch64-apple-darwin
-chmod +x ../typr/src-tauri/binaries/whisper-cpp-aarch64-apple-darwin
-cd ../typr
+mkdir -p ../mabel/src-tauri/binaries
+cp build/bin/whisper-cli ../mabel/src-tauri/binaries/whisper-cpp-aarch64-apple-darwin
+chmod +x ../mabel/src-tauri/binaries/whisper-cpp-aarch64-apple-darwin
+cd ../mabel
 
-# 3. Pull and apply v1 (security pass) then v1.1 (rename + configurable hotkey)
+# 3. Pull and apply all three patches
 BASE=https://raw.githubusercontent.com/erickgrau/claudeclaw-os/claude/audit-typr-repo-HlTnj/docs/typr-audit
 curl -L $BASE/v1-security-pass.patch -o p1.patch
 curl -L $BASE/v1.1-rename-mabel-and-configurable-hotkey.patch -o p2.patch
-git apply --check p1.patch p2.patch          # dry run
-git apply p1.patch p2.patch
-rm p1.patch p2.patch
+curl -L $BASE/v1.2-mabel-redesign.patch -o p3.patch
+git apply --check p1.patch p2.patch p3.patch       # dry run
+git apply p1.patch p2.patch p3.patch
+rm p1.patch p2.patch p3.patch
 
-# 4. Build and smoke test in dev mode
+# 4. Generate the icon files from the source SVG (one-time)
+#    Pre-req: ImageMagick or rsvg-convert. brew install imagemagick if needed.
+#    OR skip this step and use the existing Tauri icons until you swap in a real Mabel photo.
+magick src-tauri/icons/mabel-source.svg -resize 1024x1024 /tmp/mabel-icon.png
+npm run tauri icon /tmp/mabel-icon.png
+
+# 5. Build and smoke test in dev
 cd src-tauri && cargo build && cd ..
 npm install
 npm run tauri dev
 
-# 5. Build a release .app you can drop in /Applications
+# 6. Build the release .app + dmg
 npm run tauri build
-# Output: src-tauri/target/release/bundle/macos/Mabel.app
-#         src-tauri/target/release/bundle/dmg/Mabel_0.1.0_aarch64.dmg
+# Output:
+#   src-tauri/target/release/bundle/macos/Mabel.app
+#   src-tauri/target/release/bundle/dmg/Mabel_0.1.0_aarch64.dmg
 
-# 6. Commit and push
+# 7. Commit and push
 git add -A
-git commit -m "mabel v1.1: security pass, rename, configurable hotkey"
-git push -u origin mabel-v1.1
+git commit -m "mabel v1.2: redesign with dashboard, sidebar, modals, stats"
+git push -u origin mabel-v1.2
 ```
 
-## Patches in this directory
+## If you've already applied v1 + v1.1 (incremental update)
 
-| Patch | What it does |
-|-------|-------------|
-| `v1-security-pass.patch` | Strip stdout transcript leaks. Move Groq key to OS keychain. Clear clipboard after paste. Allowlist model_size. Tighten CSP. macOS-only (drop Windows enigo path). |
-| `v1.1-rename-mabel-and-configurable-hotkey.patch` | Rename Typr → Mabel everywhere user-facing (productName, identifier, window title, log prefix, package names, keychain service). Make the global hotkey rebindable: click the kbd, press a combo, the binding updates live without a restart. |
-
-## Whisper sidecar
-
-Tauri sidecars are platform-specific binaries the app shells out to. The repo
-gitignores `src-tauri/binaries/`, so the binary needs to be built once. The
-Rust build looks for the file with the target triple suffix, which on Apple
-Silicon is `whisper-cpp-aarch64-apple-darwin`.
-
-If you forget this step, the build fails at:
-
-```
-resource path `binaries/whisper-cpp-aarch64-apple-darwin` doesn't exist
+```bash
+cd ~/Antigravity/typr   # or wherever your local checkout is
+curl -L https://raw.githubusercontent.com/erickgrau/claudeclaw-os/claude/audit-typr-repo-HlTnj/docs/typr-audit/v1.2-mabel-redesign.patch -o v1.2.patch
+git apply --check v1.2.patch
+git apply v1.2.patch
+rm v1.2.patch
+npm run tauri dev   # smoke test
 ```
 
-## Smoke tests after applying
+## Real Mabel icon (replace the placeholder)
 
-### v1 (security pass)
+The included `src-tauri/icons/mabel-source.svg` is a stylized Persian cat
+based on Mabel's coloring (silver-grey, white chest, pink nose, green eyes).
+It works as a placeholder. For the real icon:
+
+1. Pick a flattering photo of Mabel from her Instagram.
+2. Run it through a generation tool (Recraft, ChatGPT image gen, Midjourney)
+   with a prompt like:
+
+   > Stylize this cat photo as a macOS app icon. Squircle background with
+   > soft 3D depth, centered subject, friendly Persian cat face with pink
+   > nose and green eyes, professional macOS Big Sur icon style, 1024x1024.
+   > No text, no watermarks.
+
+3. Save the output as a 1024x1024 PNG.
+4. Run `npm run tauri icon path/to/mabel.png`. Tauri generates all sizes
+   into `src-tauri/icons/` automatically.
+5. `npm run tauri build` again.
+
+## Smoke tests after applying v1.2
+
 - `cargo build` succeeds.
-- `npm run tauri dev` launches; settings UI loads.
-- Enter a Groq key in cloud settings, save, restart — key persists.
-- Quit app, inspect `~/Library/Application Support/com.mabel.app/config.json` —
-  should NOT contain `groqApiKey`.
-- `security find-generic-password -s com.mabel.app -a groq_api_key` — key is
-  in the macOS keychain.
-- Set `whisperModel` to `"../etc/passwd"` in `config.json` directly, restart —
-  app rejects, no write outside app dir.
-- Trigger dictation, paste lands; clipboard should be empty after.
-- Watch `Console.app` while dictating — no transcript text appears.
-
-### v1.1 (rename + hotkey)
-- Window title reads "Mabel".
-- App identifier in About is `com.mabel.app`.
-- Log prefix in `Console.app` reads `[Mabel]`.
-- Click the hotkey kbd → it shows "Press keys..." and pulses.
-- Press Esc → reverts to current binding, no change.
-- Press Cmd+Shift+M (or whatever) → binding updates immediately.
-- Trigger the new hotkey from any app → recording starts. Old hotkey no longer
-  fires.
-- Restart the app → new hotkey persists.
-- Try a single bare letter (e.g. just "A") → frontend ignores it; you have to
-  add a modifier.
+- `npm run tauri dev` launches with the new dashboard visible at startup.
+- Sidebar shows: Home, then Dictionary / Snippets / Style / Transforms /
+  Scratchpad with PRO badges and greyed icons.
+- Footer shows Activate Pro / Settings / Help.
+- Click any Pro item → upsell page appears in the right pane with "Activate
+  Pro" CTA.
+- Click Activate Pro anywhere → modal opens with v2 feature list and
+  pricing ($10/mo / $99/yr / $129 lifetime).
+- Click Settings → modal opens with internal nav: General / Engine / Privacy
+  / Account / About.
+- Settings → General: change mic, recording mode, hotkey. Hotkey rebinds
+  live (click kbd, press combo, see it accepted).
+- Settings → Engine: download a Whisper model, switch between Local and Cloud.
+- Settings → Privacy: shows the privacy claim, "Open in Finder" opens the app
+  data dir, "Reset stats" zeroes the counters.
+- Press your global hotkey from another app → recording starts, transcribes,
+  pastes, and the dashboard's Today / All-time / Streak stats bump up.
+- Quit and relaunch → stats persist.
 
 ## Rolling back
 
 ```bash
-# Single revert per patch:
-git revert HEAD                              # undo v1.1
-git revert HEAD                              # undo v1
+# Revert just v1.2:
+git apply -R v1.2.patch
 
-# Or nuke the branch entirely:
-git checkout main
-git branch -D mabel-v1.1
+# Or per commit if committed:
+git revert HEAD
 ```
