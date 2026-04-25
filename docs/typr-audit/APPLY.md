@@ -1,83 +1,113 @@
-# Applying the Typr v1 security pass
+# Applying the Mabel patches (formerly Typr)
 
-This patch hardens the upstream `albertshiney/typr` repo with the five v1
-changes described in `v1-security-pass.md`. It assumes you've already forked
-upstream to `erickgrau/typr` (or similar) with no commits added yet.
+The audit branch ships a series of patches that build on each other. Apply
+them in order. Each patch's full rationale lives next to it in this directory.
 
-## On your Mac
+## Prerequisites
+
+A working Rust + Node + Tauri toolchain on macOS, and the whisper.cpp sidecar
+binary in place (see "Whisper sidecar" below).
+
+## Quickstart
 
 ```bash
-# 1. Clone your fork
+# 1. Clone your fork (run this OUTSIDE any existing typr dir)
 git clone git@github.com:erickgrau/typr.git
 cd typr
+git checkout -b mabel-v1.1
 
-# 2. Make a branch
-git checkout -b v1-security-pass
-
-# 3. Pull this patch from the audit branch of claudeclaw-os
-curl -L \
-  https://raw.githubusercontent.com/erickgrau/claudeclaw-os/claude/audit-typr-repo-HlTnj/docs/typr-audit/v1-security-pass.patch \
-  -o v1-security-pass.patch
-
-# (or download via the GitHub UI from PR #1's file list)
-
-# 4. Apply
-git apply --check v1-security-pass.patch   # dry run, should say nothing
-git apply v1-security-pass.patch
-rm v1-security-pass.patch
-
-# 5. Build
-cd src-tauri
-cargo build                                 # pulls keyring crate, drops enigo
+# 2. Build the whisper.cpp sidecar (one-time, ~30 sec on M-series)
+#    The Rust build refuses to start without this binary present.
 cd ..
+git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git
+cd whisper.cpp
+cmake -B build
+cmake --build build --config Release -j
+mkdir -p ../typr/src-tauri/binaries
+cp build/bin/whisper-cli ../typr/src-tauri/binaries/whisper-cpp-aarch64-apple-darwin
+chmod +x ../typr/src-tauri/binaries/whisper-cpp-aarch64-apple-darwin
+cd ../typr
+
+# 3. Pull and apply v1 (security pass) then v1.1 (rename + configurable hotkey)
+BASE=https://raw.githubusercontent.com/erickgrau/claudeclaw-os/claude/audit-typr-repo-HlTnj/docs/typr-audit
+curl -L $BASE/v1-security-pass.patch -o p1.patch
+curl -L $BASE/v1.1-rename-mabel-and-configurable-hotkey.patch -o p2.patch
+git apply --check p1.patch p2.patch          # dry run
+git apply p1.patch p2.patch
+rm p1.patch p2.patch
+
+# 4. Build and smoke test in dev mode
+cd src-tauri && cargo build && cd ..
 npm install
-npm run tauri dev                           # smoke test
+npm run tauri dev
+
+# 5. Build a release .app you can drop in /Applications
+npm run tauri build
+# Output: src-tauri/target/release/bundle/macos/Mabel.app
+#         src-tauri/target/release/bundle/dmg/Mabel_0.1.0_aarch64.dmg
 
 # 6. Commit and push
 git add -A
-git commit -m "v1 security pass
-
-See docs in claudeclaw-os/docs/typr-audit/ for the full rationale."
-git push -u origin v1-security-pass
+git commit -m "mabel v1.1: security pass, rename, configurable hotkey"
+git push -u origin mabel-v1.1
 ```
 
-## What changed
+## Patches in this directory
 
-8 files modified, 1 new file. Full per-change rationale lives in
-`v1-security-pass.md`.
+| Patch | What it does |
+|-------|-------------|
+| `v1-security-pass.patch` | Strip stdout transcript leaks. Move Groq key to OS keychain. Clear clipboard after paste. Allowlist model_size. Tighten CSP. macOS-only (drop Windows enigo path). |
+| `v1.1-rename-mabel-and-configurable-hotkey.patch` | Rename Typr → Mabel everywhere user-facing (productName, identifier, window title, log prefix, package names, keychain service). Make the global hotkey rebindable: click the kbd, press a combo, the binding updates live without a restart. |
+
+## Whisper sidecar
+
+Tauri sidecars are platform-specific binaries the app shells out to. The repo
+gitignores `src-tauri/binaries/`, so the binary needs to be built once. The
+Rust build looks for the file with the target triple suffix, which on Apple
+Silicon is `whisper-cpp-aarch64-apple-darwin`.
+
+If you forget this step, the build fails at:
 
 ```
-src-tauri/Cargo.toml              | drop enigo, add keyring (apple-native)
-src-tauri/src/lib.rs              | export new secrets module
-src-tauri/src/main.rs             | strip transcript prints; handle Result from model_filename/url
-src-tauri/src/paste.rs            | macOS-only; clear clipboard 150ms after paste
-src-tauri/src/recorder.rs         | handle Result from model_filename
-src-tauri/src/settings.rs         | split Settings (in-memory) from DiskSettings (no key); migrate
-src-tauri/src/transcribe_local.rs | allowlist model_size; remove whisper-output print
-src-tauri/tauri.conf.json         | tighten CSP from null to scoped policy
-src-tauri/src/secrets.rs          | NEW: keychain wrapper for Groq API key
+resource path `binaries/whisper-cpp-aarch64-apple-darwin` doesn't exist
 ```
 
 ## Smoke tests after applying
 
+### v1 (security pass)
 - `cargo build` succeeds.
 - `npm run tauri dev` launches; settings UI loads.
-- Enter a Groq key in the cloud settings, save, restart the app — key persists.
-- Quit the app, inspect `~/Library/Application Support/com.typr.app/config.json`
-  — should NOT contain `groqApiKey`.
-- Run `security find-generic-password -s com.typr.app -a groq_api_key` — the
-  key is in the macOS keychain.
+- Enter a Groq key in cloud settings, save, restart — key persists.
+- Quit app, inspect `~/Library/Application Support/com.mabel.app/config.json` —
+  should NOT contain `groqApiKey`.
+- `security find-generic-password -s com.mabel.app -a groq_api_key` — key is
+  in the macOS keychain.
 - Set `whisperModel` to `"../etc/passwd"` in `config.json` directly, restart —
-  app should reject the model size, not write outside the app dir.
-- Trigger dictation, paste lands, then check the clipboard manually — should
-  be empty.
-- Watch `Console.app` while dictating — no transcript text should appear.
+  app rejects, no write outside app dir.
+- Trigger dictation, paste lands; clipboard should be empty after.
+- Watch `Console.app` while dictating — no transcript text appears.
+
+### v1.1 (rename + hotkey)
+- Window title reads "Mabel".
+- App identifier in About is `com.mabel.app`.
+- Log prefix in `Console.app` reads `[Mabel]`.
+- Click the hotkey kbd → it shows "Press keys..." and pulses.
+- Press Esc → reverts to current binding, no change.
+- Press Cmd+Shift+M (or whatever) → binding updates immediately.
+- Trigger the new hotkey from any app → recording starts. Old hotkey no longer
+  fires.
+- Restart the app → new hotkey persists.
+- Try a single bare letter (e.g. just "A") → frontend ignores it; you have to
+  add a modifier.
 
 ## Rolling back
 
 ```bash
-git checkout main
-git branch -D v1-security-pass
-```
+# Single revert per patch:
+git revert HEAD                              # undo v1.1
+git revert HEAD                              # undo v1
 
-The patch is a single commit; reverting is one `git revert`.
+# Or nuke the branch entirely:
+git checkout main
+git branch -D mabel-v1.1
+```
